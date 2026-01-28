@@ -15,184 +15,180 @@ from telegram.ext import (
 )
 
 # ================== SOZLAMALAR ==================
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 CHANNEL_USERNAME = "@tsuos_radio"
 
-OWNER_ID = 6220077209
-ADMIN_IDS = [
-    6220077209,
+ADMINS = {
+    6220077209,  # super admin (hammasini ko‘radi)
     6617998011,
     6870150995,
-]
+}
 
-WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
-WAIT_TEXT = "Xabar yuborildi📤"
+SUPER_ADMIN = 6220077209
 
 COUNTER_FILE = "counter.json"
+PENDING_FILE = "pending.json"
 
-# pending_id -> data
-PENDING = {}
+# ================== YORDAMCHI FUNKSIYALAR ==================
 
-# admin_message_id -> user_id (reply uchun)
-MESSAGE_MAP = {}
-
-# ================== YORDAMCHI ==================
-def load_json(file, default):
-    if not os.path.exists(file):
-        with open(file, "w", encoding="utf-8") as f:
-            json.dump(default, f)
+def load_json(path, default):
+    if not os.path.exists(path):
         return default
-    with open(file, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_json(file, data):
-    with open(file, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ================== COUNTER ==================
-def get_next_count():
+def next_counter():
     data = load_json(COUNTER_FILE, {"count": 0})
     data["count"] += 1
     save_json(COUNTER_FILE, data)
     return data["count"]
 
-# ================== START ==================
+def get_nickname(user):
+    if user.first_name:
+        return user.first_name
+    return "Anonim"
+
+# ================== /start ==================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(WELCOME_TEXT)
-
-# ================== USER MESSAGE ==================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
-    user = update.message.from_user
-
-    # -------- ADMIN REPLY --------
-    if user.id in ADMIN_IDS and update.message.reply_to_message:
-        replied_id = update.message.reply_to_message.message_id
-        if replied_id in MESSAGE_MAP:
-            await context.bot.send_message(
-                chat_id=MESSAGE_MAP[replied_id],
-                text=f"📻 TSUOS Radio javobi:\n\n{update.message.text}"
-            )
-        return
-
-    # -------- FOYDALANUVCHI --------
-    count = get_next_count()
-    header = f"Yangi xabar🔔({count})"
-
-    username = f"@{user.username}" if user.username else "(username yo‘q)"
-    user_text = update.message.text or ""
-
-    admin_text = (
-        f"{header}\n\n"
-        f"👤 Yuboruvchi: {username}\n"
-        f"🆔 ID: {user.id}\n\n"
-        f"📩 Xabar:\n<b>{user_text}</b>"
+    await update.message.reply_text(
+        "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
     )
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{count}"),
-            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{count}"),
-        ]
-    ])
+# ================== FOYDALANUVCHI XABARI ==================
 
-    PENDING[count] = {
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    counter = next_counter()
+    nickname = get_nickname(user)
+
+    pending = load_json(PENDING_FILE, {})
+
+    pending[str(counter)] = {
         "user_id": user.id,
-        "username": username,
-        "text": user_text,
-        "header": header,
-        "admin_messages": {},
+        "username": user.username,
+        "nickname": nickname,
+        "text": update.message.text,
     }
 
-    for admin_id in ADMIN_IDS:
-        sent = await context.bot.send_message(
+    save_json(PENDING_FILE, pending)
+
+    # tugmalar
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{counter}"),
+                InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}"),
+            ]
+        ]
+    )
+
+    # adminlarga yuborish
+    for admin_id in ADMINS:
+        if admin_id == SUPER_ADMIN:
+            text = (
+                f"Yangi xabar🔔({counter})\n\n"
+                f"👤 Yuboruvchi: {nickname}\n"
+                f"🔗 Username: @{user.username}\n"
+                f"🆔 ID: {user.id}\n\n"
+                f"📩 Xabar:\n"
+                f"<b>{update.message.text}</b>"
+            )
+        else:
+            text = (
+                f"Yangi xabar🔔({counter})\n\n"
+                f"👤 Yuboruvchi: {nickname}\n\n"
+                f"📩 Xabar:\n"
+                f"<b>{update.message.text}</b>"
+            )
+
+        await context.bot.send_message(
             chat_id=admin_id,
-            text=admin_text,
+            text=text,
+            parse_mode="HTML",
             reply_markup=keyboard,
-            parse_mode="HTML"
         )
-        PENDING[count]["admin_messages"][admin_id] = sent.message_id
-        MESSAGE_MAP[sent.message_id] = user.id
 
-    # USERGA JAVOB
-    await update.message.reply_text(WAIT_TEXT)
+    # ✅ MUHIM: foydalanuvchiga darhol javob
+    await update.message.reply_text("Xabar yuborildi📤")
 
-# ================== BUTTONS ==================
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================== TASDIQLASH / RAD ETISH ==================
+
+async def handle_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    admin_id = query.from_user.id
-    if admin_id not in ADMIN_IDS:
+    action, counter = query.data.split(":")
+    admin = query.from_user
+
+    pending = load_json(PENDING_FILE, {})
+
+    if counter not in pending:
+        await query.edit_message_text("Bu xabar allaqachon yopilgan.")
         return
 
-    action, msg_id = query.data.split(":")
-    msg_id = int(msg_id)
-
-    if msg_id not in PENDING:
-        return
-
-    data = PENDING.pop(msg_id)
-    admin_name = query.from_user.first_name
+    data = pending[counter]
+    nickname = data["nickname"]
 
     if action == "approve":
-        status_owner = f"\n\nTasdiqlandi — by {admin_name}"
-        status_other = "\n\nTasdiqlandi"
-
-        # Kanalga yuborish
+        text = (
+            f"Yangi xabar🔔({counter})\n\n"
+            f"👤 Yuboruvchi: {nickname}\n\n"
+            f"📩 Xabar:\n"
+            f"<b>{data['text']}</b>\n\n"
+            f"Tasdiqlandi"
+        )
         await context.bot.send_message(
             chat_id=CHANNEL_USERNAME,
-            text=f"{data['header']}\n\n*{data['text']}*",
-            parse_mode="Markdown"
+            text=text,
+            parse_mode="HTML",
         )
 
-        # Foydalanuvchiga xabar
         await context.bot.send_message(
             chat_id=data["user_id"],
-            text="Tasdiqlandi✅️"
+            text="Tasdiqlandi✅️",
         )
+
+        if admin.id == SUPER_ADMIN:
+            footer = f"\n\nTasdiqlandi — by {admin.first_name}"
+        else:
+            footer = "\n\nTasdiqlandi"
 
     else:
-        status_owner = f"\n\nRad etildi — by {admin_name}"
-        status_other = "\n\nRad etildi"
-
-        # Foydalanuvchiga xabar
         await context.bot.send_message(
             chat_id=data["user_id"],
-            text="Rad etildi🚫"
+            text="Rad etildi🚫",
         )
 
-    # -------- BARCHA ADMINLARDA XABARNI SAQLAB QOLISH --------
-    base_text = (
-        f"{data['header']}\n\n"
-        f"👤 Yuboruvchi: {data['username']}\n"
-        f"🆔 ID: {data['user_id']}\n\n"
-        f"📩 Xabar:\n<b>{data['text']}</b>"
+        if admin.id == SUPER_ADMIN:
+            footer = f"\n\nRad etildi — by {admin.first_name}"
+        else:
+            footer = "\n\nRad etildi"
+
+    # adminlarda xabarni yopish
+    await query.edit_message_text(
+        query.message.text + footer,
+        parse_mode="HTML",
     )
 
-    for aid, mid in data["admin_messages"].items():
-        try:
-            await context.bot.edit_message_text(
-                chat_id=aid,
-                message_id=mid,
-                text=base_text + (status_owner if aid == OWNER_ID else status_other),
-                parse_mode="HTML"
-            )
-        except:
-            pass
+    del pending[counter]
+    save_json(PENDING_FILE, pending)
 
-# ================== RUN ==================
+# ================== MAIN ==================
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(handle_buttons))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    app.add_handler(CallbackQueryHandler(handle_decision))
 
-    print("🤖 TSUOS Radio bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
