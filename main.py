@@ -73,7 +73,6 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id not in ADMIN_IDS:
         return
 
-    # reply orqali
     if update.message.reply_to_message:
         target_id = MESSAGE_MAP.get(update.message.reply_to_message.message_id)
         if target_id:
@@ -83,7 +82,6 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ User topilmadi.")
         return
 
-    # ID orqali
     if context.args:
         try:
             ban_user(int(context.args[0]))
@@ -98,7 +96,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
 
-    # BAN
     if is_banned(user.id):
         return
 
@@ -116,6 +113,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ===== FOYDALANUVCHI =====
+    # 🔥 1-BUYRUQ: HAR DOIM JAVOB
+    await update.message.reply_text("Xabar jo'natildi📤")
+
     count = get_next_count()
     header = f"Yangi xabar🔔({count})"
 
@@ -128,6 +128,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     payload = {
         "user_id": user.id,
+        "nickname": user.first_name or "Anonim",
         "username": f"@{user.username}" if user.username else "(username yo‘q)",
         "text": update.message.text,
         "photo": update.message.photo[-1].file_id if update.message.photo else None,
@@ -141,23 +142,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "admin_messages": {}
     }
 
-    admin_text = (
+    # 🔒 4-BUYRUQ: ADMIN FORMAT
+    admin_text_simple = (
         f"{header}\n\n"
-        f"👤 Yuboruvchi: {payload['username']}\n"
+        f"👤 Yuboruvchi: {payload['nickname']}\n\n"
+        f"📩 Xabar:\n{update.message.text or '[Media]'}"
+    )
+
+    admin_text_full = (
+        f"{header}\n\n"
+        f"👤 Yuboruvchi: {payload['nickname']}\n"
+        f"🔗 Username: {payload['username']}\n"
         f"🆔 ID: {user.id}\n\n"
         f"📩 Xabar:\n{update.message.text or '[Media]'}"
     )
 
     for admin_id in ADMIN_IDS:
+        text_to_send = admin_text_full if admin_id == OWNER_ID else admin_text_simple
+
         sent = await context.bot.send_message(
             chat_id=admin_id,
-            text=admin_text,
+            text=text_to_send,
             reply_markup=keyboard
         )
+
         PENDING[count]["admin_messages"][admin_id] = sent.message_id
         MESSAGE_MAP[sent.message_id] = user.id
-
-    await update.message.reply_text(WAIT_TEXT)
 
 # ========= BUTTONS =========
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,35 +189,32 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = entry["payload"]
     admin_msgs = entry["admin_messages"]
 
-    # === ACTION ===
+    # 🔴 2-BUYRUQ: USERGA NATIJA
     if action == "approve":
-        if data["text"]:
-            await context.bot.send_message(
-                chat_id=CHANNEL_USERNAME,
-                text=f"{data['header']}\n\n*{data['text']}*",
-                parse_mode="Markdown"
-            )
-        elif data["photo"]:
-            await context.bot.send_photo(CHANNEL_USERNAME, data["photo"], caption=data["header"])
-        elif data["video"]:
-            await context.bot.send_video(CHANNEL_USERNAME, data["video"], caption=data["header"])
-        elif data["voice"]:
-            await context.bot.send_voice(CHANNEL_USERNAME, data["voice"], caption=data["header"])
-
-        owner_text = f"✅ Tasdiqlandi — by {query.from_user.first_name}"
-        other_text = "✅ Xabar tasdiqlandi"
-
+        await context.bot.send_message(data["user_id"], "Tasdiqlandi✅️")
     else:
-        owner_text = f"🚫 Rad etildi — by {query.from_user.first_name}"
-        other_text = "🚫 Xabar rad etildi"
+        await context.bot.send_message(data["user_id"], "Rad etildi🚫")
 
-    # === EDIT ALL ADMINS ===
+    # 🔴 3-BUYRUQ: STATUSNI PASTIGA QO‘SHISH
+    if action == "approve":
+        status_owner = f"\n\nTasdiqlandi✅️ — by {query.from_user.first_name}"
+        status_other = "\n\nTasdiqlandi✅️"
+    else:
+        status_owner = f"\n\nRad etildi🚫 — by {query.from_user.first_name}"
+        status_other = "\n\nRad etildi🚫"
+
     for aid, mid in admin_msgs.items():
         try:
+            old_text = query.message.text
             await context.bot.edit_message_text(
                 chat_id=aid,
                 message_id=mid,
-                text=owner_text if aid == OWNER_ID else other_text
+                text=old_text + (status_owner if aid == OWNER_ID else status_other)
+            )
+            await context.bot.edit_message_reply_markup(
+                chat_id=aid,
+                message_id=mid,
+                reply_markup=None
             )
         except:
             pass
