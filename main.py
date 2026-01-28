@@ -1,5 +1,4 @@
 import os
-import json
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -16,25 +15,7 @@ CHANNEL_USERNAME = "@tsuos_radio"
 ADMIN_IDS = [6220077209, 6617998011]
 
 WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
-SENT_TEXT = "Xabaringiz yuborildi📤."
-
-COUNTER_FILE = "counter.json"
-
-
-# ===== COUNTER =====
-def get_next_count():
-    if not os.path.exists(COUNTER_FILE):
-        data = {"count": 0}
-    else:
-        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-    data["count"] += 1
-
-    with open(COUNTER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-
-    return data["count"]
+SENT_TEXT = "Xabaringiz yuborildi 📤"
 
 
 # ===== HANDLERS =====
@@ -46,10 +27,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    text = update.message.text
-    count = get_next_count()
+    user_text = update.message.text
 
-    final_text = f"🆕 Yangi xabar ({count})!\n\n{text}"
+    final_text = f"🆕 Yangi xabar!\n\n{user_text}"
 
     # Kanalga yuborish
     await context.bot.send_message(
