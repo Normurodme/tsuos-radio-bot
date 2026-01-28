@@ -14,24 +14,16 @@ from telegram.ext import (
     filters,
 )
 
-# ================== SOZLAMALAR ==================
-
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 CHANNEL_USERNAME = "@tsuos_radio"
 
-ADMINS = {
-    6220077209,  # super admin (hammasini ko‘radi)
-    6617998011,
-    6870150995,
-}
-
+ADMINS = {6220077209, 6617998011, 6870150995}
 SUPER_ADMIN = 6220077209
 
 COUNTER_FILE = "counter.json"
 PENDING_FILE = "pending.json"
 
-# ================== YORDAMCHI FUNKSIYALAR ==================
 
 def load_json(path, default):
     if not os.path.exists(path):
@@ -39,9 +31,11 @@ def load_json(path, default):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
 
 def next_counter():
     data = load_json(COUNTER_FILE, {"count": 0})
@@ -49,19 +43,18 @@ def next_counter():
     save_json(COUNTER_FILE, data)
     return data["count"]
 
-def get_nickname(user):
-    if user.first_name:
-        return user.first_name
-    return "Anonim"
 
-# ================== /start ==================
+def get_nickname(user):
+    return user.first_name or "Anonim"
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
     )
 
-# ================== FOYDALANUVCHI XABARI ==================
+
+# ================= USER MESSAGE =================
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
@@ -69,27 +62,21 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     nickname = get_nickname(user)
 
     pending = load_json(PENDING_FILE, {})
-
     pending[str(counter)] = {
         "user_id": user.id,
         "username": user.username,
         "nickname": nickname,
         "text": update.message.text,
     }
-
     save_json(PENDING_FILE, pending)
 
-    # tugmalar
-    keyboard = InlineKeyboardMarkup(
+    keyboard = InlineKeyboardMarkup([
         [
-            [
-                InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{counter}"),
-                InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}"),
-            ]
+            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{counter}"),
+            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}"),
         ]
-    )
+    ])
 
-    # adminlarga yuborish
     for admin_id in ADMINS:
         if admin_id == SUPER_ADMIN:
             text = (
@@ -115,10 +102,11 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=keyboard,
         )
 
-    # ✅ MUHIM: foydalanuvchiga darhol javob
+    # 🔥 MUHIM QATOR (SEN AYTGANI)
     await update.message.reply_text("Xabar yuborildi📤")
 
-# ================== TASDIQLASH / RAD ETISH ==================
+
+# ================= APPROVE / REJECT =================
 
 async def handle_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -128,68 +116,50 @@ async def handle_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin = query.from_user
 
     pending = load_json(PENDING_FILE, {})
-
     if counter not in pending:
         await query.edit_message_text("Bu xabar allaqachon yopilgan.")
         return
 
     data = pending[counter]
-    nickname = data["nickname"]
 
     if action == "approve":
-        text = (
-            f"Yangi xabar🔔({counter})\n\n"
-            f"👤 Yuboruvchi: {nickname}\n\n"
-            f"📩 Xabar:\n"
-            f"<b>{data['text']}</b>\n\n"
-            f"Tasdiqlandi"
-        )
         await context.bot.send_message(
             chat_id=CHANNEL_USERNAME,
-            text=text,
+            text=(
+                f"Yangi xabar🔔({counter})\n\n"
+                f"👤 Yuboruvchi: {data['nickname']}\n\n"
+                f"📩 Xabar:\n"
+                f"<b>{data['text']}</b>\n\n"
+                f"Tasdiqlandi"
+            ),
             parse_mode="HTML",
         )
-
-        await context.bot.send_message(
-            chat_id=data["user_id"],
-            text="Tasdiqlandi✅️",
-        )
-
-        if admin.id == SUPER_ADMIN:
-            footer = f"\n\nTasdiqlandi — by {admin.first_name}"
-        else:
-            footer = "\n\nTasdiqlandi"
+        await context.bot.send_message(data["user_id"], "Tasdiqlandi✅️")
+        footer = "Tasdiqlandi"
 
     else:
-        await context.bot.send_message(
-            chat_id=data["user_id"],
-            text="Rad etildi🚫",
-        )
+        await context.bot.send_message(data["user_id"], "Rad etildi🚫")
+        footer = "Rad etildi"
 
-        if admin.id == SUPER_ADMIN:
-            footer = f"\n\nRad etildi — by {admin.first_name}"
-        else:
-            footer = "\n\nRad etildi"
+    if admin.id == SUPER_ADMIN:
+        footer += f" — by {admin.first_name}"
 
-    # adminlarda xabarni yopish
     await query.edit_message_text(
-        query.message.text + footer,
+        query.message.text + f"\n\n{footer}",
         parse_mode="HTML",
     )
 
     del pending[counter]
     save_json(PENDING_FILE, pending)
 
-# ================== MAIN ==================
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     app.add_handler(CallbackQueryHandler(handle_decision))
-
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
