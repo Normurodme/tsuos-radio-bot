@@ -3,156 +3,226 @@ import os
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
     ApplicationBuilder,
+    ContextTypes,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    ContextTypes,
-    filters,
+    filters
 )
-
-# ================== SOZLAMALAR ==================
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-CHANNEL_ID = -1001234567890  # ⚠️ O'ZINGNIKI BILAN ALMASHTIR
-
-ADMINS = [
-    6220077209,  # super admin (hammasini ko'radi)
+# ===== ADMINLAR =====
+SUPER_ADMIN = 6220077209
+ADMINS = {
+    6220077209,
     6617998011,
-    6870150995,
-]
+    6870150995
+}
 
-SUPER_ADMIN_ID = 6220077209
+# ===== KANAL =====
+CHANNEL_ID = -100XXXXXXXXXX  # ⚠️ o‘zingniki bilan almashtir
 
+# ===== FILES =====
 COUNTER_FILE = "counter.json"
+BAN_FILE = "banned.json"
 
-# ================== COUNTER ==================
+pending_messages = {}
 
-def load_counter():
-    if not os.path.exists(COUNTER_FILE):
-        with open(COUNTER_FILE, "w") as f:
-            json.dump({"count": 0}, f)
-    with open(COUNTER_FILE, "r") as f:
-        return json.load(f)["count"]
+# ================== UTILS ==================
 
-def save_counter(value):
-    with open(COUNTER_FILE, "w") as f:
-        json.dump({"count": value}, f)
+def load_json(file, default):
+    if not os.path.exists(file):
+        return default
+    with open(file, "r") as f:
+        return json.load(f)
 
-counter = load_counter()
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f)
 
-# ================== XABARLAR HOLATI ==================
+def next_counter():
+    data = load_json(COUNTER_FILE, {"count": 0})
+    data["count"] += 1
+    save_json(COUNTER_FILE, data)
+    return data["count"]
 
-messages_state = {}  # msg_id: {status, user_id, admin_msgs}
+def is_banned(user_id):
+    banned = load_json(BAN_FILE, [])
+    return user_id in banned
 
-# ================== /start ==================
+# ================== START ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
     )
 
-# ================== USER XABARI ==================
+# ================== USER MESSAGE ==================
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global counter
-    user = update.effective_user
-    message = update.message
+    user = update.message.from_user
 
-    counter += 1
-    save_counter(counter)
+    if is_banned(user.id):
+        return
 
-    # foydalanuvchiga HAR DOIM javob
-    await message.reply_text("Xabar yuborildi📤")
+    # 🔴 MUHIM: HAR DOIM JAVOB
+    await update.message.reply_text("Xabar yuborildi📤")
 
-    # ADMINLARGA MATN
-    def admin_text(full=False):
-        text = f"Yangi xabar🔔({counter})\n\n"
-        text += f"👤 Yuboruvchi: {user.first_name}\n"
-        if full:
-            text += f"🔗 Username: @{user.username}\n"
-            text += f"🆔 ID: {user.id}\n"
-        text += "\n📩 Xabar:\n"
-        text += f"<b>{message.text or ''}</b>"
-        return text
+    counter = next_counter()
 
-    keyboard = InlineKeyboardMarkup([
+    username = user.username or "Anonymous"
+    nickname = user.first_name or "Anonymous"
+
+    base_text = (
+        f"Yangi xabar🔔({counter})\n\n"
+        f"👤 Yuboruvchi: {nickname}\n\n"
+        f"📩 Xabar:\n"
+    )
+
+    admin_extra = (
+        f"\n\n🔎 Maxfiy:\n"
+        f"@{username}\n"
+        f"🆔 ID: {user.id}"
+    )
+
+    buttons = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{counter}"),
+            InlineKeyboardButton("Tasdiqlash✅", callback_data=f"approve:{counter}"),
             InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}")
         ]
     ])
 
-    admin_message_ids = []
+    for admin in ADMINS:
+        text = base_text
+        if admin == SUPER_ADMIN:
+            text += admin_extra
 
-    for admin_id in ADMINS:
-        full = admin_id == SUPER_ADMIN_ID
-        sent = await context.bot.send_message(
-            chat_id=admin_id,
-            text=admin_text(full),
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-        admin_message_ids.append((admin_id, sent.message_id))
+        sent = None
 
-    messages_state[counter] = {
-        "status": "pending",
-        "user_id": user.id,
-        "admin_msgs": admin_message_ids,
-    }
+        if update.message.text:
+            sent = await context.bot.send_message(
+                chat_id=admin,
+                text=text + f"\n\n<b>{update.message.text}</b>",
+                parse_mode="HTML",
+                reply_markup=buttons
+            )
 
-# ================== APPROVE / REJECT ==================
+        elif update.message.photo:
+            sent = await context.bot.send_photo(
+                chat_id=admin,
+                photo=update.message.photo[-1].file_id,
+                caption=text,
+                reply_markup=buttons
+            )
 
-async def handle_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        elif update.message.video:
+            sent = await context.bot.send_video(
+                chat_id=admin,
+                video=update.message.video.file_id,
+                caption=text,
+                reply_markup=buttons
+            )
+
+        elif update.message.voice:
+            sent = await context.bot.send_voice(
+                chat_id=admin,
+                voice=update.message.voice.file_id,
+                caption=text,
+                reply_markup=buttons
+            )
+
+        if sent:
+            pending_messages[counter] = {
+                "user_id": user.id,
+                "user_chat": update.message.chat_id,
+                "admin_msgs": pending_messages.get(counter, {}).get("admin_msgs", []) + [(admin, sent.message_id)],
+                "status": "pending"
+            }
+
+# ================== CALLBACK ==================
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     action, num = query.data.split(":")
     num = int(num)
 
-    if num not in messages_state:
+    if num not in pending_messages:
+        await query.edit_message_text("❌ Bu xabar yopilgan")
         return
 
-    msg = messages_state[num]
-
-    if msg["status"] != "pending":
-        await query.answer("Bu xabar allaqachon yopilgan", show_alert=True)
+    data = pending_messages[num]
+    if data["status"] != "pending":
         return
 
     admin = query.from_user
-    status_text = "Tasdiqlandi✅️" if action == "approve" else "Rad etildi🚫"
 
-    msg["status"] = action
+    if admin.id not in ADMINS:
+        return
 
-    # foydalanuvchiga xabar
+    if action == "approve":
+        data["status"] = "approved"
+        status_text = "Tasdiqlandi✅"
+    else:
+        data["status"] = "rejected"
+        status_text = "Rad etildi🚫"
+
+    # Foydalanuvchiga xabar
     await context.bot.send_message(
-        chat_id=msg["user_id"],
+        chat_id=data["user_chat"],
         text=status_text
     )
 
-    # ADMIN XABARLARINI YANGILASH
-    for admin_id, message_id in msg["admin_msgs"]:
-        suffix = ""
-        if admin_id == SUPER_ADMIN_ID:
-            suffix = f" — by {admin.first_name}"
-
-        await context.bot.edit_message_text(
-            chat_id=admin_id,
-            message_id=message_id,
-            text=f"{query.message.text}\n\n{status_text}{suffix}",
+    # Kanalga chiqarish (faqat tasdiqlansa)
+    if action == "approve":
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=(
+                f"Yangi xabar🔔({num})\n\n"
+                f"📩 Xabar:\n"
+                f"<b>{query.message.text.split('📩 Xabar:')[-1].strip()}</b>"
+            ),
             parse_mode="HTML"
         )
 
-        # knopkalarni olib tashlash
+    # Admin xabarlarini yangilash
+    for admin_id, msg_id in data["admin_msgs"]:
+        text = status_text
+        if admin_id == SUPER_ADMIN:
+            text += f" — by {admin.first_name}"
+
         await context.bot.edit_message_reply_markup(
             chat_id=admin_id,
-            message_id=message_id,
+            message_id=msg_id,
             reply_markup=None
         )
+        await context.bot.send_message(
+            chat_id=admin_id,
+            text=text
+        )
+
+# ================== BAN ==================
+
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id not in ADMINS:
+        return
+
+    if not update.message.reply_to_message:
+        return
+
+    target = update.message.reply_to_message.from_user.id
+    banned = load_json(BAN_FILE, [])
+    if target not in banned:
+        banned.append(target)
+        save_json(BAN_FILE, banned)
+
+    await update.message.reply_text("🚫 Foydalanuvchi ban qilindi")
 
 # ================== MAIN ==================
 
@@ -160,10 +230,10 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
-    app.add_handler(CallbackQueryHandler(handle_decision))
 
-    print("Bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
