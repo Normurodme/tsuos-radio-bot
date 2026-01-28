@@ -1,5 +1,5 @@
-import os
 import json
+import os
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -14,210 +14,156 @@ from telegram.ext import (
     filters,
 )
 
-# ========= SOZLAMALAR =========
+# ================== SOZLAMALAR ==================
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = -1001234567890  # ❗️KANAL ID (REAL RAQAM)
+
+CHANNEL_ID = -1001234567890  # ⚠️ O'ZINGNIKI BILAN ALMASHTIR
 
 ADMINS = [
-    6220077209,  # super admin (kim tasdiqlaganini ko‘radi)
+    6220077209,  # super admin (hammasini ko'radi)
     6617998011,
     6870150995,
 ]
 
-SUPER_ADMIN = 6220077209
+SUPER_ADMIN_ID = 6220077209
 
 COUNTER_FILE = "counter.json"
-PENDING_FILE = "pending.json"
 
-# ========= YORDAMCHI =========
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+# ================== COUNTER ==================
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def load_counter():
+    if not os.path.exists(COUNTER_FILE):
+        with open(COUNTER_FILE, "w") as f:
+            json.dump({"count": 0}, f)
+    with open(COUNTER_FILE, "r") as f:
+        return json.load(f)["count"]
 
-def next_counter():
-    data = load_json(COUNTER_FILE, {"count": 0})
-    data["count"] += 1
-    save_json(COUNTER_FILE, data)
-    return data["count"]
+def save_counter(value):
+    with open(COUNTER_FILE, "w") as f:
+        json.dump({"count": value}, f)
 
-# ========= START =========
+counter = load_counter()
+
+# ================== XABARLAR HOLATI ==================
+
+messages_state = {}  # msg_id: {status, user_id, admin_msgs}
+
+# ================== /start ==================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
     )
 
-# ========= FOYDALANUVCHI XABARI =========
+# ================== USER XABARI ==================
+
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    msg = update.message
+    global counter
+    user = update.effective_user
+    message = update.message
 
-    num = next_counter()
+    counter += 1
+    save_counter(counter)
 
-    pending = load_json(PENDING_FILE, {})
-    pending[str(num)] = {
-        "user_id": user.id,
-        "username": user.username,
-        "nickname": user.first_name,
-        "type": msg.effective_attachment.__class__.__name__ if msg.effective_attachment else "text",
-        "text": msg.text or msg.caption,
-        "file_id": (
-            msg.photo[-1].file_id if msg.photo else
-            msg.video.file_id if msg.video else
-            msg.voice.file_id if msg.voice else
-            None
-        )
-    }
-    save_json(PENDING_FILE, pending)
+    # foydalanuvchiga HAR DOIM javob
+    await message.reply_text("Xabar yuborildi📤")
 
-    # FOYDALANUVCHIGA DARHOL JAVOB
-    await msg.reply_text("Xabar yuborildi📤")
+    # ADMINLARGA MATN
+    def admin_text(full=False):
+        text = f"Yangi xabar🔔({counter})\n\n"
+        text += f"👤 Yuboruvchi: {user.first_name}\n"
+        if full:
+            text += f"🔗 Username: @{user.username}\n"
+            text += f"🆔 ID: {user.id}\n"
+        text += "\n📩 Xabar:\n"
+        text += f"<b>{message.text or ''}</b>"
+        return text
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{num}"),
-            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{num}")
+            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{counter}"),
+            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}")
         ]
     ])
 
+    admin_message_ids = []
+
     for admin_id in ADMINS:
-        text = (
-            f"Yangi xabar🔔({num})\n\n"
-            f"👤 Yuboruvchi: Nickname\n"
+        full = admin_id == SUPER_ADMIN_ID
+        sent = await context.bot.send_message(
+            chat_id=admin_id,
+            text=admin_text(full),
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
+        admin_message_ids.append((admin_id, sent.message_id))
 
-        if admin_id == SUPER_ADMIN:
-            text += (
-                f"🔗 Username: @{user.username}\n"
-                f"🆔 ID: {user.id}\n\n"
-            )
-        else:
-            text += "\n"
+    messages_state[counter] = {
+        "status": "pending",
+        "user_id": user.id,
+        "admin_msgs": admin_message_ids,
+    }
 
-        text += f"📩 Xabar:\n<b>{msg.text or msg.caption or 'Media'}</b>"
+# ================== APPROVE / REJECT ==================
 
-        if msg.text:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        elif msg.photo:
-            await context.bot.send_photo(
-                chat_id=admin_id,
-                photo=msg.photo[-1].file_id,
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        elif msg.video:
-            await context.bot.send_video(
-                chat_id=admin_id,
-                video=msg.video.file_id,
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        elif msg.voice:
-            await context.bot.send_voice(
-                chat_id=admin_id,
-                voice=msg.voice.file_id,
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-
-# ========= TASDIQLASH / RAD =========
 async def handle_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     action, num = query.data.split(":")
-    pending = load_json(PENDING_FILE, {})
+    num = int(num)
 
-    if num not in pending:
-        await query.edit_message_text("Bu xabar yopilgan.")
+    if num not in messages_state:
         return
 
-    data = pending[num]
+    msg = messages_state[num]
+
+    if msg["status"] != "pending":
+        await query.answer("Bu xabar allaqachon yopilgan", show_alert=True)
+        return
+
     admin = query.from_user
+    status_text = "Tasdiqlandi✅️" if action == "approve" else "Rad etildi🚫"
 
-    # FOYDALANUVCHIGA NATIJA
-    if action == "approve":
-        await context.bot.send_message(
-            chat_id=data["user_id"],
-            text="Tasdiqlandi✅️"
+    msg["status"] = action
+
+    # foydalanuvchiga xabar
+    await context.bot.send_message(
+        chat_id=msg["user_id"],
+        text=status_text
+    )
+
+    # ADMIN XABARLARINI YANGILASH
+    for admin_id, message_id in msg["admin_msgs"]:
+        suffix = ""
+        if admin_id == SUPER_ADMIN_ID:
+            suffix = f" — by {admin.first_name}"
+
+        await context.bot.edit_message_text(
+            chat_id=admin_id,
+            message_id=message_id,
+            text=f"{query.message.text}\n\n{status_text}{suffix}",
+            parse_mode="HTML"
         )
 
-        # KANALGA FAQAT XABAR
-        if data["type"] == "text":
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=f"Yangi xabar🔔({num})\n\n📩 Xabar:\n<b>{data['text']}</b>",
-                parse_mode="HTML"
-            )
-        elif data["type"] == "PhotoSize":
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=data["file_id"],
-                caption=f"Yangi xabar🔔({num})\n\n📩 Xabar:\n<b>{data['text']}</b>",
-                parse_mode="HTML"
-            )
-        elif data["type"] == "Video":
-            await context.bot.send_video(
-                chat_id=CHANNEL_ID,
-                video=data["file_id"],
-                caption=f"Yangi xabar🔔({num})\n\n📩 Xabar:\n<b>{data['text']}</b>",
-                parse_mode="HTML"
-            )
-        elif data["type"] == "Voice":
-            await context.bot.send_voice(
-                chat_id=CHANNEL_ID,
-                voice=data["file_id"]
-            )
-
-        status = "Tasdiqlandi✅️"
-
-    else:
-        await context.bot.send_message(
-            chat_id=data["user_id"],
-            text="Rad etildi🚫"
+        # knopkalarni olib tashlash
+        await context.bot.edit_message_reply_markup(
+            chat_id=admin_id,
+            message_id=message_id,
+            reply_markup=None
         )
-        status = "Rad etildi🚫"
 
-    # ADMINLAR UCHUN YOPISH
-    for admin_id in ADMINS:
-        if admin_id == SUPER_ADMIN:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=f"{status} — by {admin.first_name}"
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=status
-            )
+# ================== MAIN ==================
 
-    del pending[num]
-    save_json(PENDING_FILE, pending)
-
-# ========= MAIN =========
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
     app.add_handler(CallbackQueryHandler(handle_decision))
-    app.add_handler(MessageHandler(
-        filters.TEXT | filters.PHOTO | filters.VIDEO | filters.VOICE,
-        handle_user_message
-    ))
 
+    print("Bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
