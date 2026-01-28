@@ -1,239 +1,230 @@
-import json
 import os
+import json
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
 )
 from telegram.ext import (
     ApplicationBuilder,
-    ContextTypes,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    filters
+    ContextTypes,
+    filters,
 )
 
+# ========= SOZLAMALAR =========
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# ===== ADMINLAR =====
-SUPER_ADMIN = 6220077209
-ADMINS = {
-    6220077209,
-    6617998011,
-    6870150995
-}
+CHANNEL_USERNAME = "@tsuos_radio"
 
-# ===== KANAL =====
-CHANNEL_ID = -100XXXXXXXXXX  # ⚠️ o‘zingniki bilan almashtir
+OWNER_ID = 6220077209
+ADMIN_IDS = [6220077209, 6617998011, 6870150995]
 
-# ===== FILES =====
+WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
+WAIT_TEXT = "⏳ Xabaringiz moderator tomonidan tekshirilmoqda."
+
 COUNTER_FILE = "counter.json"
-BAN_FILE = "banned.json"
+BANNED_FILE = "banned.json"
 
-pending_messages = {}
+# pending_id -> {payload, admin_messages}
+PENDING = {}
 
-# ================== UTILS ==================
+# admin_message_id -> user_id (reply uchun)
+MESSAGE_MAP = {}
 
+# ========= JSON YORDAMCHI =========
 def load_json(file, default):
     if not os.path.exists(file):
+        with open(file, "w", encoding="utf-8") as f:
+            json.dump(default, f)
         return default
-    with open(file, "r") as f:
+    with open(file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def save_json(file, data):
-    with open(file, "w") as f:
+    with open(file, "w", encoding="utf-8") as f:
         json.dump(data, f)
 
-def next_counter():
+# ========= COUNTER =========
+def get_next_count():
     data = load_json(COUNTER_FILE, {"count": 0})
     data["count"] += 1
     save_json(COUNTER_FILE, data)
     return data["count"]
 
-def is_banned(user_id):
-    banned = load_json(BAN_FILE, [])
+# ========= BAN =========
+def is_banned(user_id: int) -> bool:
+    banned = load_json(BANNED_FILE, [])
     return user_id in banned
 
-# ================== START ==================
+def ban_user(user_id: int):
+    banned = load_json(BANNED_FILE, [])
+    if user_id not in banned:
+        banned.append(user_id)
+        save_json(BANNED_FILE, banned)
 
+# ========= COMMANDS =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
-    )
+    await update.message.reply_text(WELCOME_TEXT)
 
-# ================== USER MESSAGE ==================
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id not in ADMIN_IDS:
+        return
 
-async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # reply orqali
+    if update.message.reply_to_message:
+        target_id = MESSAGE_MAP.get(update.message.reply_to_message.message_id)
+        if target_id:
+            ban_user(target_id)
+            await update.message.reply_text("🚫 Foydalanuvchi ban qilindi.")
+        else:
+            await update.message.reply_text("❌ User topilmadi.")
+        return
+
+    # ID orqali
+    if context.args:
+        try:
+            ban_user(int(context.args[0]))
+            await update.message.reply_text("🚫 Foydalanuvchi ban qilindi.")
+        except:
+            await update.message.reply_text("❌ Noto‘g‘ri ID.")
+
+# ========= MESSAGE =========
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
     user = update.message.from_user
 
+    # BAN
     if is_banned(user.id):
         return
 
-    # 🔴 MUHIM: HAR DOIM JAVOB
-    await update.message.reply_text("Xabar yuborildi📤")
+    # ===== ADMIN REPLY =====
+    if user.id in ADMIN_IDS:
+        if update.message.reply_to_message:
+            replied_id = update.message.reply_to_message.message_id
+            if replied_id in MESSAGE_MAP:
+                target_user_id = MESSAGE_MAP[replied_id]
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=f"📻 TSUOS Radio javobi:\n\n{update.message.text}"
+                )
+                await update.message.reply_text("✅ Javob yuborildi.")
+        return
 
-    counter = next_counter()
+    # ===== FOYDALANUVCHI =====
+    count = get_next_count()
+    header = f"Yangi xabar🔔({count})"
 
-    username = user.username or "Anonymous"
-    nickname = user.first_name or "Anonymous"
-
-    base_text = (
-        f"Yangi xabar🔔({counter})\n\n"
-        f"👤 Yuboruvchi: {nickname}\n\n"
-        f"📩 Xabar:\n"
-    )
-
-    admin_extra = (
-        f"\n\n🔎 Maxfiy:\n"
-        f"@{username}\n"
-        f"🆔 ID: {user.id}"
-    )
-
-    buttons = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Tasdiqlash✅", callback_data=f"approve:{counter}"),
-            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{counter}")
+            InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{count}"),
+            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{count}"),
         ]
     ])
 
-    for admin in ADMINS:
-        text = base_text
-        if admin == SUPER_ADMIN:
-            text += admin_extra
+    payload = {
+        "user_id": user.id,
+        "username": f"@{user.username}" if user.username else "(username yo‘q)",
+        "text": update.message.text,
+        "photo": update.message.photo[-1].file_id if update.message.photo else None,
+        "video": update.message.video.file_id if update.message.video else None,
+        "voice": update.message.voice.file_id if update.message.voice else None,
+        "header": header,
+    }
 
-        sent = None
+    PENDING[count] = {
+        "payload": payload,
+        "admin_messages": {}
+    }
 
-        if update.message.text:
-            sent = await context.bot.send_message(
-                chat_id=admin,
-                text=text + f"\n\n<b>{update.message.text}</b>",
-                parse_mode="HTML",
-                reply_markup=buttons
-            )
+    admin_text = (
+        f"{header}\n\n"
+        f"👤 Yuboruvchi: {payload['username']}\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"📩 Xabar:\n{update.message.text or '[Media]'}"
+    )
 
-        elif update.message.photo:
-            sent = await context.bot.send_photo(
-                chat_id=admin,
-                photo=update.message.photo[-1].file_id,
-                caption=text,
-                reply_markup=buttons
-            )
+    for admin_id in ADMIN_IDS:
+        sent = await context.bot.send_message(
+            chat_id=admin_id,
+            text=admin_text,
+            reply_markup=keyboard
+        )
+        PENDING[count]["admin_messages"][admin_id] = sent.message_id
+        MESSAGE_MAP[sent.message_id] = user.id
 
-        elif update.message.video:
-            sent = await context.bot.send_video(
-                chat_id=admin,
-                video=update.message.video.file_id,
-                caption=text,
-                reply_markup=buttons
-            )
+    await update.message.reply_text(WAIT_TEXT)
 
-        elif update.message.voice:
-            sent = await context.bot.send_voice(
-                chat_id=admin,
-                voice=update.message.voice.file_id,
-                caption=text,
-                reply_markup=buttons
-            )
-
-        if sent:
-            pending_messages[counter] = {
-                "user_id": user.id,
-                "user_chat": update.message.chat_id,
-                "admin_msgs": pending_messages.get(counter, {}).get("admin_msgs", []) + [(admin, sent.message_id)],
-                "status": "pending"
-            }
-
-# ================== CALLBACK ==================
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ========= BUTTONS =========
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    action, num = query.data.split(":")
-    num = int(num)
-
-    if num not in pending_messages:
-        await query.edit_message_text("❌ Bu xabar yopilgan")
+    admin_id = query.from_user.id
+    if admin_id not in ADMIN_IDS:
         return
 
-    data = pending_messages[num]
-    if data["status"] != "pending":
+    action, msg_id = query.data.split(":")
+    msg_id = int(msg_id)
+
+    if msg_id not in PENDING:
+        await query.edit_message_text("❌ Bu xabar yopilgan.")
         return
 
-    admin = query.from_user
+    entry = PENDING.pop(msg_id)
+    data = entry["payload"]
+    admin_msgs = entry["admin_messages"]
 
-    if admin.id not in ADMINS:
-        return
-
+    # === ACTION ===
     if action == "approve":
-        data["status"] = "approved"
-        status_text = "Tasdiqlandi✅"
+        if data["text"]:
+            await context.bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=f"{data['header']}\n\n*{data['text']}*",
+                parse_mode="Markdown"
+            )
+        elif data["photo"]:
+            await context.bot.send_photo(CHANNEL_USERNAME, data["photo"], caption=data["header"])
+        elif data["video"]:
+            await context.bot.send_video(CHANNEL_USERNAME, data["video"], caption=data["header"])
+        elif data["voice"]:
+            await context.bot.send_voice(CHANNEL_USERNAME, data["voice"], caption=data["header"])
+
+        owner_text = f"✅ Tasdiqlandi — by {query.from_user.first_name}"
+        other_text = "✅ Xabar tasdiqlandi"
+
     else:
-        data["status"] = "rejected"
-        status_text = "Rad etildi🚫"
+        owner_text = f"🚫 Rad etildi — by {query.from_user.first_name}"
+        other_text = "🚫 Xabar rad etildi"
 
-    # Foydalanuvchiga xabar
-    await context.bot.send_message(
-        chat_id=data["user_chat"],
-        text=status_text
-    )
+    # === EDIT ALL ADMINS ===
+    for aid, mid in admin_msgs.items():
+        try:
+            await context.bot.edit_message_text(
+                chat_id=aid,
+                message_id=mid,
+                text=owner_text if aid == OWNER_ID else other_text
+            )
+        except:
+            pass
 
-    # Kanalga chiqarish (faqat tasdiqlansa)
-    if action == "approve":
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=(
-                f"Yangi xabar🔔({num})\n\n"
-                f"📩 Xabar:\n"
-                f"<b>{query.message.text.split('📩 Xabar:')[-1].strip()}</b>"
-            ),
-            parse_mode="HTML"
-        )
-
-    # Admin xabarlarini yangilash
-    for admin_id, msg_id in data["admin_msgs"]:
-        text = status_text
-        if admin_id == SUPER_ADMIN:
-            text += f" — by {admin.first_name}"
-
-        await context.bot.edit_message_reply_markup(
-            chat_id=admin_id,
-            message_id=msg_id,
-            reply_markup=None
-        )
-        await context.bot.send_message(
-            chat_id=admin_id,
-            text=text
-        )
-
-# ================== BAN ==================
-
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id not in ADMINS:
-        return
-
-    if not update.message.reply_to_message:
-        return
-
-    target = update.message.reply_to_message.from_user.id
-    banned = load_json(BAN_FILE, [])
-    if target not in banned:
-        banned.append(target)
-        save_json(BAN_FILE, banned)
-
-    await update.message.reply_text("🚫 Foydalanuvchi ban qilindi")
-
-# ================== MAIN ==================
-
+# ========= RUN =========
 def main():
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN topilmadi")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ban", ban))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user_message))
+    app.add_handler(CommandHandler("ban", ban_command))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_buttons))
 
+    print("🤖 TSUOS Radio bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
