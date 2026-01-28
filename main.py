@@ -1,4 +1,5 @@
 import os
+import json
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,17 +9,35 @@ from telegram.ext import (
     filters,
 )
 
-# ===== SOZLAMALAR =====
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# ========= SOZLAMALAR =========
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Railway Variables ichida bo‘lishi shart
 
 CHANNEL_USERNAME = "@tsuos_radio"
 ADMIN_IDS = [6220077209, 6617998011]
 
 WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
-SENT_TEXT = "Xabaringiz yuborildi 📤"
+SENT_TEXT = "Xabaringiz yuborildi📤."
+
+COUNTER_FILE = "counter.json"
 
 
-# ===== HANDLERS =====
+# ========= COUNTER =========
+def get_next_count():
+    if not os.path.exists(COUNTER_FILE):
+        data = {"count": 0}
+    else:
+        with open(COUNTER_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+    data["count"] += 1
+
+    with open(COUNTER_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    return data["count"]
+
+
+# ========= HANDLERS =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(WELCOME_TEXT)
 
@@ -27,35 +46,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    user_text = update.message.text
+    user = update.message.from_user
+    text = update.message.text
+    count = get_next_count()
 
-    final_text = f"🆕 Yangi xabar!\n\n{user_text}"
+    # Foydalanuvchi ma’lumotlari
+    username = f"@{user.username}" if user.username else "yo‘q"
+    fullname = f"{user.first_name or ''} {user.last_name or ''}".strip()
+
+    # ===== KANAL UCHUN (ANONIM) =====
+    channel_text = (
+        f"🆕 Yangi xabar ({count})\n\n"
+        f"{text}"
+    )
+
+    # ===== ADMINLAR UCHUN (KIM YUBORGANI BILAN) =====
+    admin_text = (
+        f"🆕 Yangi xabar ({count})\n\n"
+        f"👤 Yuboruvchi: {fullname}\n"
+        f"🔗 Username: {username}\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"📩 Xabar:\n{text}"
+    )
 
     # Kanalga yuborish
     await context.bot.send_message(
         chat_id=CHANNEL_USERNAME,
-        text=final_text
+        text=channel_text
     )
 
     # Adminlarga yuborish
     for admin_id in ADMIN_IDS:
         await context.bot.send_message(
             chat_id=admin_id,
-            text=final_text
+            text=admin_text
         )
 
     # Foydalanuvchiga javob
     await update.message.reply_text(SENT_TEXT)
 
 
-# ===== RUN =====
+# ========= RUN =========
 def main():
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN topilmadi (Railway Variables ni tekshir)")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("Bot ishga tushdi...")
+    print("🤖 TSUOS Radio bot ishga tushdi...")
     app.run_polling()
 
 
