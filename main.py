@@ -18,21 +18,23 @@ from telegram.ext import (
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 CHANNEL_USERNAME = "@tsuos_radio"
-ADMIN_IDS = [6220077209, 6617998011]
+
+OWNER_ID = 6220077209
+ADMIN_IDS = [6220077209, 6617998011, 6870150995]
 
 WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
 WAIT_TEXT = "⏳ Xabaringiz moderator tomonidan tekshirilmoqda."
-SENT_TEXT = "Xabaringiz yuborildi📤."
 
 COUNTER_FILE = "counter.json"
 BANNED_FILE = "banned.json"
 
-# pending_id -> data
+# pending_id -> {payload, admin_messages}
 PENDING = {}
+
 # admin_message_id -> user_id (reply uchun)
 MESSAGE_MAP = {}
 
-# ========= YORDAMCHI =========
+# ========= JSON YORDAMCHI =========
 def load_json(file, default):
     if not os.path.exists(file):
         with open(file, "w", encoding="utf-8") as f:
@@ -124,7 +126,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    PENDING[count] = {
+    payload = {
         "user_id": user.id,
         "username": f"@{user.username}" if user.username else "(username yo‘q)",
         "text": update.message.text,
@@ -134,9 +136,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "header": header,
     }
 
+    PENDING[count] = {
+        "payload": payload,
+        "admin_messages": {}
+    }
+
     admin_text = (
         f"{header}\n\n"
-        f"👤 Yuboruvchi: {PENDING[count]['username']}\n"
+        f"👤 Yuboruvchi: {payload['username']}\n"
         f"🆔 ID: {user.id}\n\n"
         f"📩 Xabar:\n{update.message.text or '[Media]'}"
     )
@@ -147,6 +154,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=admin_text,
             reply_markup=keyboard
         )
+        PENDING[count]["admin_messages"][admin_id] = sent.message_id
         MESSAGE_MAP[sent.message_id] = user.id
 
     await update.message.reply_text(WAIT_TEXT)
@@ -156,7 +164,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.from_user.id not in ADMIN_IDS:
+    admin_id = query.from_user.id
+    if admin_id not in ADMIN_IDS:
         return
 
     action, msg_id = query.data.split(":")
@@ -166,8 +175,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Bu xabar yopilgan.")
         return
 
-    data = PENDING.pop(msg_id)
+    entry = PENDING.pop(msg_id)
+    data = entry["payload"]
+    admin_msgs = entry["admin_messages"]
 
+    # === ACTION ===
     if action == "approve":
         if data["text"]:
             await context.bot.send_message(
@@ -182,10 +194,23 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data["voice"]:
             await context.bot.send_voice(CHANNEL_USERNAME, data["voice"], caption=data["header"])
 
-        await query.edit_message_text("✅ Kanalga joylandi.")
+        owner_text = f"✅ Tasdiqlandi — by {query.from_user.first_name}"
+        other_text = "✅ Xabar tasdiqlandi"
 
-    elif action == "reject":
-        await query.edit_message_text("🚫 Xabar rad etildi.")
+    else:
+        owner_text = f"🚫 Rad etildi — by {query.from_user.first_name}"
+        other_text = "🚫 Xabar rad etildi"
+
+    # === EDIT ALL ADMINS ===
+    for aid, mid in admin_msgs.items():
+        try:
+            await context.bot.edit_message_text(
+                chat_id=aid,
+                message_id=mid,
+                text=owner_text if aid == OWNER_ID else other_text
+            )
+        except:
+            pass
 
 # ========= RUN =========
 def main():
