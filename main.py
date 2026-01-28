@@ -113,7 +113,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ===== FOYDALANUVCHI =====
-    # 🔥 1-BUYRUQ: HAR DOIM JAVOB
+    # 1️⃣ HAR DOIM JAVOB
     await update.message.reply_text("Xabar jo'natildi📤")
 
     count = get_next_count()
@@ -142,7 +142,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "admin_messages": {}
     }
 
-    # 🔒 4-BUYRUQ: ADMIN FORMAT
+    # 4️⃣ ADMIN FORMAT
     admin_text_simple = (
         f"{header}\n\n"
         f"👤 Yuboruvchi: {payload['nickname']}\n\n"
@@ -189,13 +189,44 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = entry["payload"]
     admin_msgs = entry["admin_messages"]
 
-    # 🔴 2-BUYRUQ: USERGA NATIJA
+    # 2️⃣ USERGA NATIJA
     if action == "approve":
         await context.bot.send_message(data["user_id"], "Tasdiqlandi✅️")
     else:
         await context.bot.send_message(data["user_id"], "Rad etildi🚫")
 
-    # 🔴 3-BUYRUQ: STATUSNI PASTIGA QO‘SHISH
+    # 🔥 TASDIQLANGANDA KANALGA YUBORISH
+    if action == "approve":
+        if data["text"]:
+            await context.bot.send_message(
+                chat_id=CHANNEL_USERNAME,
+                text=(
+                    f"{data['header']}\n\n"
+                    f"👤 Yuboruvchi: {data['nickname']}\n\n"
+                    f"📩 Xabar:\n"
+                    f"*{data['text']}*"
+                ),
+                parse_mode="Markdown"
+            )
+        elif data["photo"]:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_USERNAME,
+                photo=data["photo"],
+                caption=f"{data['header']}\n\n👤 Yuboruvchi: {data['nickname']}"
+            )
+        elif data["video"]:
+            await context.bot.send_video(
+                chat_id=CHANNEL_USERNAME,
+                video=data["video"],
+                caption=f"{data['header']}\n\n👤 Yuboruvchi: {data['nickname']}"
+            )
+        elif data["voice"]:
+            await context.bot.send_voice(
+                chat_id=CHANNEL_USERNAME,
+                voice=data["voice"]
+            )
+
+    # 3️⃣ STATUSNI PASTIGA QO‘SHISH
     if action == "approve":
         status_owner = f"\n\nTasdiqlandi✅️ — by {query.from_user.first_name}"
         status_other = "\n\nTasdiqlandi✅️"
