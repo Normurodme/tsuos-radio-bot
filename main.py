@@ -23,18 +23,17 @@ OWNER_ID = 6220077209
 ADMIN_IDS = [6220077209, 6617998011, 6870150995]
 
 WELCOME_TEXT = "Xush kelibsiz! TSUOS radiosiga xabar jo‘natishingiz mumkin."
-WAIT_TEXT = "⏳ Xabaringiz moderator tomonidan tekshirilmoqda."
 
 COUNTER_FILE = "counter.json"
 BANNED_FILE = "banned.json"
 
-# pending_id -> {payload, admin_messages}
+# pending_id -> {payload, admin_messages, texts}
 PENDING = {}
 
-# admin_message_id -> user_id (reply uchun)
+# admin_message_id -> user_id
 MESSAGE_MAP = {}
 
-# ========= JSON YORDAMCHI =========
+# ========= JSON =========
 def load_json(file, default):
     if not os.path.exists(file):
         with open(file, "w", encoding="utf-8") as f:
@@ -55,11 +54,11 @@ def get_next_count():
     return data["count"]
 
 # ========= BAN =========
-def is_banned(user_id: int) -> bool:
+def is_banned(user_id):
     banned = load_json(BANNED_FILE, [])
     return user_id in banned
 
-def ban_user(user_id: int):
+def ban_user(user_id):
     banned = load_json(BANNED_FILE, [])
     if user_id not in banned:
         banned.append(user_id)
@@ -74,9 +73,9 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if update.message.reply_to_message:
-        target_id = MESSAGE_MAP.get(update.message.reply_to_message.message_id)
-        if target_id:
-            ban_user(target_id)
+        target = MESSAGE_MAP.get(update.message.reply_to_message.message_id)
+        if target:
+            ban_user(target)
             await update.message.reply_text("🚫 Foydalanuvchi ban qilindi.")
         else:
             await update.message.reply_text("❌ User topilmadi.")
@@ -99,20 +98,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_banned(user.id):
         return
 
-    # ===== ADMIN REPLY =====
+    # ADMIN REPLY
     if user.id in ADMIN_IDS:
         if update.message.reply_to_message:
-            replied_id = update.message.reply_to_message.message_id
-            if replied_id in MESSAGE_MAP:
-                target_user_id = MESSAGE_MAP[replied_id]
+            mid = update.message.reply_to_message.message_id
+            if mid in MESSAGE_MAP:
                 await context.bot.send_message(
-                    chat_id=target_user_id,
+                    chat_id=MESSAGE_MAP[mid],
                     text=f"📻 TSUOS Radio javobi:\n\n{update.message.text}"
                 )
                 await update.message.reply_text("✅ Javob yuborildi.")
         return
 
-    # ===== FOYDALANUVCHI =====
+    # USER CONFIRM
     await update.message.reply_text("Xabar jo'natildi📤")
 
     count = get_next_count()
@@ -121,49 +119,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("Tasdiqlash✅️", callback_data=f"approve:{count}"),
-            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{count}"),
+            InlineKeyboardButton("Rad etish🚫", callback_data=f"reject:{count}")
         ]
     ])
 
-    payload = {
-        "user_id": user.id,
-        "nickname": user.first_name or "Anonim",
-        "username": f"@{user.username}" if user.username else "(username yo‘q)",
-        "text": update.message.text,
-        "photo": update.message.photo[-1].file_id if update.message.photo else None,
-        "video": update.message.video.file_id if update.message.video else None,
-        "voice": update.message.voice.file_id if update.message.voice else None,
-        "header": header,
-    }
-
-    PENDING[count] = {
-        "payload": payload,
-        "admin_messages": {}
-    }
+    nickname = user.first_name or "Anonim"
+    username = f"@{user.username}" if user.username else "(username yo‘q)"
 
     admin_text_simple = (
         f"{header}\n\n"
-        f"👤 Yuboruvchi: {payload['nickname']}\n\n"
-        f"📩 Xabar:\n{update.message.text or '[Media]'}"
+        f"👤 Yuboruvchi: {nickname}\n\n"
+        f"📩 Xabar:\n{update.message.text}"
     )
 
     admin_text_full = (
         f"{header}\n\n"
-        f"👤 Yuboruvchi: {payload['nickname']}\n"
-        f"🔗 Username: {payload['username']}\n"
+        f"👤 Yuboruvchi: {nickname}\n"
+        f"🔗 Username: {username}\n"
         f"🆔 ID: {user.id}\n\n"
-        f"📩 Xabar:\n{update.message.text or '[Media]'}"
+        f"📩 Xabar:\n{update.message.text}"
     )
 
-    for admin_id in ADMIN_IDS:
-        text_to_send = admin_text_full if admin_id == OWNER_ID else admin_text_simple
+    PENDING[count] = {
+        "payload": {
+            "user_id": user.id,
+            "text": update.message.text,
+            "header": header
+        },
+        "admin_messages": {},
+        "texts": {
+            "simple": admin_text_simple,
+            "full": admin_text_full
+        }
+    }
 
+    for admin_id in ADMIN_IDS:
+        text = admin_text_full if admin_id == OWNER_ID else admin_text_simple
         sent = await context.bot.send_message(
             chat_id=admin_id,
-            text=text_to_send,
+            text=text,
             reply_markup=keyboard
         )
-
         PENDING[count]["admin_messages"][admin_id] = sent.message_id
         MESSAGE_MAP[sent.message_id] = user.id
 
@@ -176,84 +172,54 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if admin_id not in ADMIN_IDS:
         return
 
-    action, msg_id = query.data.split(":")
-    msg_id = int(msg_id)
+    action, cid = query.data.split(":")
+    cid = int(cid)
 
-    if msg_id not in PENDING:
-        await query.edit_message_text("❌ Bu xabar yopilgan.")
+    if cid not in PENDING:
         return
 
-    entry = PENDING.pop(msg_id)
-    data = entry["payload"]
-    admin_msgs = entry["admin_messages"]
+    entry = PENDING.pop(cid)
 
+    # USER NOTIFY
     if action == "approve":
-        await context.bot.send_message(data["user_id"], "Tasdiqlandi✅️")
+        await context.bot.send_message(entry["payload"]["user_id"], "Tasdiqlandi✅️")
     else:
-        await context.bot.send_message(data["user_id"], "Rad etildi🚫")
+        await context.bot.send_message(entry["payload"]["user_id"], "Rad etildi🚫")
 
-    # ===== KANALGA YUBORISH (YUBORUVCHISIZ) =====
+    # CHANNEL
     if action == "approve":
-        if data["text"]:
-            await context.bot.send_message(
-                chat_id=CHANNEL_USERNAME,
-                text=f"{data['header']}\n\n📩 Xabar:\n*{data['text']}*",
-                parse_mode="Markdown"
-            )
-        elif data["photo"]:
-            await context.bot.send_photo(
-                chat_id=CHANNEL_USERNAME,
-                photo=data["photo"],
-                caption=data["header"]
-            )
-        elif data["video"]:
-            await context.bot.send_video(
-                chat_id=CHANNEL_USERNAME,
-                video=data["video"],
-                caption=data["header"]
-            )
-        elif data["voice"]:
-            await context.bot.send_voice(
-                chat_id=CHANNEL_USERNAME,
-                voice=data["voice"]
-            )
+        await context.bot.send_message(
+            chat_id=CHANNEL_USERNAME,
+            text=f"{entry['payload']['header']}\n\n📩 Xabar:\n*{entry['payload']['text']}*",
+            parse_mode="Markdown"
+        )
 
-    if action == "approve":
-        status_owner = f"\n\nTasdiqlandi✅️ — by {query.from_user.first_name}"
-        status_other = "\n\nTasdiqlandi✅️"
-    else:
-        status_owner = f"\n\nRad etildi🚫 — by {query.from_user.first_name}"
-        status_other = "\n\nRad etildi🚫"
+    # STATUS
+    for aid, mid in entry["admin_messages"].items():
+        base = entry["texts"]["full"] if aid == OWNER_ID else entry["texts"]["simple"]
+        if action == "approve":
+            status = f"\n\nTasdiqlandi✅️" + (f" — by {query.from_user.first_name}" if aid == OWNER_ID else "")
+        else:
+            status = f"\n\nRad etildi🚫" + (f" — by {query.from_user.first_name}" if aid == OWNER_ID else "")
 
-    for aid, mid in admin_msgs.items():
-        try:
-            old_text = query.message.text
-            await context.bot.edit_message_text(
-                chat_id=aid,
-                message_id=mid,
-                text=old_text + (status_owner if aid == OWNER_ID else status_other)
-            )
-            await context.bot.edit_message_reply_markup(
-                chat_id=aid,
-                message_id=mid,
-                reply_markup=None
-            )
-        except:
-            pass
+        await context.bot.edit_message_text(
+            chat_id=aid,
+            message_id=mid,
+            text=base + status
+        )
+        await context.bot.edit_message_reply_markup(
+            chat_id=aid,
+            message_id=mid,
+            reply_markup=None
+        )
 
 # ========= RUN =========
 def main():
-    if not TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN topilmadi")
-
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_buttons))
-
-    print("🤖 TSUOS Radio bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
