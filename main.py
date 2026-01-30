@@ -98,7 +98,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_banned(user.id):
         return
 
-    # ADMIN REPLY
+    # ===== ADMIN REPLY =====
     if user.id in ADMIN_IDS:
         if update.message.reply_to_message:
             mid = update.message.reply_to_message.message_id
@@ -110,7 +110,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ Javob yuborildi.")
         return
 
-    # USER CONFIRM
+    # ===== USER CONFIRM =====
     await update.message.reply_text("Xabar jo'natildi📤")
 
     count = get_next_count()
@@ -178,40 +178,53 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cid not in PENDING:
         return
 
-    entry = PENDING.pop(cid)
+    entry = PENDING[cid]  # ❗️ POP EMAS
+    payload = entry["payload"]
+    admin_msgs = entry["admin_messages"]
+    texts = entry["texts"]
 
     # USER NOTIFY
     if action == "approve":
-        await context.bot.send_message(entry["payload"]["user_id"], "Tasdiqlandi✅️")
+        await context.bot.send_message(payload["user_id"], "Tasdiqlandi✅️")
     else:
-        await context.bot.send_message(entry["payload"]["user_id"], "Rad etildi🚫")
+        await context.bot.send_message(payload["user_id"], "Rad etildi🚫")
 
-    # CHANNEL
+    # CHANNEL (YUBORUVCHISIZ)
     if action == "approve":
         await context.bot.send_message(
             chat_id=CHANNEL_USERNAME,
-            text=f"{entry['payload']['header']}\n\n📩 Xabar:\n*{entry['payload']['text']}*",
+            text=f"{payload['header']}\n\n📩 Xabar:\n*{payload['text']}*",
             parse_mode="Markdown"
         )
 
-    # STATUS
-    for aid, mid in entry["admin_messages"].items():
-        base = entry["texts"]["full"] if aid == OWNER_ID else entry["texts"]["simple"]
-        if action == "approve":
-            status = f"\n\nTasdiqlandi✅️" + (f" — by {query.from_user.first_name}" if aid == OWNER_ID else "")
-        else:
-            status = f"\n\nRad etildi🚫" + (f" — by {query.from_user.first_name}" if aid == OWNER_ID else "")
+    # STATUS + BUTTON REMOVE (HAMMA ADMINGA, O‘ZI BOSHGANGA HAM)
+    for aid, mid in admin_msgs.items():
+        base = texts["full"] if aid == OWNER_ID else texts["simple"]
 
-        await context.bot.edit_message_text(
-            chat_id=aid,
-            message_id=mid,
-            text=base + status
-        )
-        await context.bot.edit_message_reply_markup(
-            chat_id=aid,
-            message_id=mid,
-            reply_markup=None
-        )
+        if action == "approve":
+            status = "\n\nTasdiqlandi✅️"
+        else:
+            status = "\n\nRad etildi🚫"
+
+        if aid == OWNER_ID:
+            status += f" — by {query.from_user.first_name}"
+
+        try:
+            await context.bot.edit_message_text(
+                chat_id=aid,
+                message_id=mid,
+                text=base + status
+            )
+            await context.bot.edit_message_reply_markup(
+                chat_id=aid,
+                message_id=mid,
+                reply_markup=None
+            )
+        except:
+            pass
+
+    # ❗️ ENDI O‘CHIRILADI
+    PENDING.pop(cid)
 
 # ========= RUN =========
 def main():
@@ -220,6 +233,7 @@ def main():
     app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_buttons))
+    print("🤖 TSUOS Radio bot ishga tushdi...")
     app.run_polling()
 
 if __name__ == "__main__":
